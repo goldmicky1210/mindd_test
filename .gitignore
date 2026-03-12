@@ -1,0 +1,50 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Storage (runtime data - do not commit)
+storage/mindd.db
+storage/indexes/
+
+# Evaluation results
+evaluation/results.json
+evaluation/results_*.json
+
+# Sample data (large binary files)
+data/startups/alpha/*.pdf
+data/startups/alpha/*.xlsx
+data/startups/beta/*.pdf
+data/startups/beta/*.xlsx
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
