@@ -62,7 +62,7 @@ def compare_startups(
     names_str = " vs ".join(startup_names[sid] for sid in startup_ids)
 
     if settings.llm_available:
-        answer = _call_openai(names_str, combined_context, question)
+        answer = _call_openai_compare(names_str, combined_context, question, startup_ids, startup_names, startup_evidence)
     else:
         answer = _fallback_compare(startup_ids, startup_names, startup_evidence, question)
 
@@ -104,27 +104,39 @@ def _build_combined_context(
     return "\n\n".join(parts)
 
 
-def _call_openai(names_str: str, combined_context: str, question: str) -> str:
+def _call_openai_compare(
+    names_str: str,
+    combined_context: str,
+    question: str,
+    startup_ids: list[str],
+    startup_names: dict[str, str],
+    startup_evidence: dict[str, dict],
+) -> str:
     from openai import OpenAI
+    from openai import RateLimitError, AuthenticationError, APIError
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    response = client.chat.completions.create(
-        model=settings.openai_chat_model,
-        messages=[
-            {"role": "system", "content": COMPARE_SYSTEM},
-            {
-                "role": "user",
-                "content": COMPARE_USER.format(
-                    startup_names=names_str,
-                    combined_context=combined_context,
-                    question=question,
-                ),
-            },
-        ],
-        temperature=0.2,
-        max_tokens=1500,
-    )
-    return response.choices[0].message.content.strip()
+    try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        response = client.chat.completions.create(
+            model=settings.openai_chat_model,
+            messages=[
+                {"role": "system", "content": COMPARE_SYSTEM},
+                {
+                    "role": "user",
+                    "content": COMPARE_USER.format(
+                        startup_names=names_str,
+                        combined_context=combined_context,
+                        question=question,
+                    ),
+                },
+            ],
+            temperature=0.2,
+            max_tokens=1500,
+        )
+        return response.choices[0].message.content.strip()
+    except (RateLimitError, AuthenticationError, APIError) as exc:
+        note = "OpenAI quota exceeded" if isinstance(exc, RateLimitError) else f"OpenAI error: {exc}"
+        return _fallback_compare(startup_ids, startup_names, startup_evidence, question, note=note)
 
 
 def _fallback_compare(
@@ -132,8 +144,13 @@ def _fallback_compare(
     startup_names: dict[str, str],
     evidence: dict[str, dict],
     question: str,
+    note: str = "",
 ) -> str:
-    lines = [f"Comparison: {' vs '.join(startup_names.values())}", ""]
+    lines: list[str] = []
+    if note:
+        lines.append(f"[{note} - showing data-driven comparison]")
+        lines.append("")
+    lines += [f"Comparison: {' vs '.join(startup_names.values())}", ""]
     q_lower = question.lower()
 
     for sid in startup_ids:
@@ -158,5 +175,6 @@ def _fallback_compare(
                 lines.append(f"  {display}: {val}")
         lines.append("")
 
-    lines.append("(Set OPENAI_API_KEY for AI-powered comparative analysis.)")
+    if not note:
+        lines.append("(Set a valid OPENAI_API_KEY with available credits for AI-powered analysis.)")
     return "\n".join(lines)

@@ -46,7 +46,7 @@ def answer_question(
     metrics = retrieval["metrics"]
 
     if settings.llm_available:
-        answer = _call_openai(question, context)
+        answer = _call_openai(question, context, metrics)
     else:
         answer = _fallback_answer(question, context, metrics)
 
@@ -69,55 +69,80 @@ def answer_question(
     }
 
 
-def _call_openai(question: str, context: str) -> str:
+def _call_openai(question: str, context: str, metrics: list[dict]) -> str:
     from openai import OpenAI
+    from openai import RateLimitError, AuthenticationError, APIError
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    response = client.chat.completions.create(
-        model=settings.openai_chat_model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": USER_TEMPLATE.format(context=context, question=question)},
-        ],
-        temperature=0.2,
-        max_tokens=1024,
-    )
-    return response.choices[0].message.content.strip()
+    try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        response = client.chat.completions.create(
+            model=settings.openai_chat_model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": USER_TEMPLATE.format(context=context, question=question)},
+            ],
+            temperature=0.2,
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content.strip()
+    except RateLimitError:
+        return _fallback_answer(question, context, metrics, note="OpenAI quota exceeded - showing data-driven answer.")
+    except AuthenticationError:
+        return _fallback_answer(question, context, metrics, note="OpenAI API key is invalid - showing data-driven answer.")
+    except APIError as exc:
+        return _fallback_answer(question, context, metrics, note=f"OpenAI API error ({exc.status_code}) - showing data-driven answer.")
 
 
-def _fallback_answer(question: str, context: str, metrics: list[dict]) -> str:
-    """Rule-based answer when no LLM is available."""
+def _fallback_answer(
+    question: str,
+    context: str,
+    metrics: list[dict],
+    note: str = "",
+) -> str:
+    """Rule-based answer used when no LLM is available or OpenAI fails."""
     q_lower = question.lower()
+    lines: list[str] = []
 
-    # Try to match question against metric names
-    metric_answers = []
+    if note:
+        lines.append(f"[{note}]")
+        lines.append("")
+
+    # Always show ALL metrics, highlighting ones relevant to the question
+    relevant_metrics = []
+    other_metrics = []
     for m in metrics:
         name = m["metric_name"]
         keywords = name.replace("_", " ").split()
+        val = m.get("value_text") or (str(m["value"]) if m.get("value") is not None else None)
+        if not val:
+            continue
+        display = name.replace("_", " ").title()
+        period = f" ({m['period']})" if m.get("period") else ""
+        entry = f"  • {display}: {val}{period}"
         if any(kw in q_lower for kw in keywords):
-            val = m.get("value_text") or (str(m["value"]) if m.get("value") is not None else None)
-            if val:
-                display = m.get("metric_name", "").replace("_", " ").title()
-                period = f" ({m['period']})" if m.get("period") else ""
-                metric_answers.append(f"{display}: {val}{period}")
+            relevant_metrics.append(entry)
+        else:
+            other_metrics.append(entry)
 
-    if metric_answers:
-        lines = ["Based on the financial model data:"] + [f"  • {a}" for a in metric_answers]
-        if context:
-            lines.append("\nAdditional context from documents is available in the evidence field.")
-        return "\n".join(lines)
+    if relevant_metrics:
+        lines.append("Direct answer from financial model:")
+        lines.extend(relevant_metrics)
 
+    if other_metrics:
+        lines.append("\nOther available metrics:")
+        lines.extend(other_metrics)
+
+    # Append relevant document excerpts
     if context:
-        # Return the first relevant paragraph from context
-        paragraphs = [p.strip() for p in context.split("\n\n") if p.strip()]
-        if paragraphs:
-            return (
-                f"Based on the available documents:\n\n{paragraphs[0]}\n\n"
-                "(Note: Set OPENAI_API_KEY for AI-generated answers.)"
-            )
+        doc_parts = [p.strip() for p in context.split("\n\n") if p.strip() and not p.startswith("[Structured")]
+        if doc_parts:
+            lines.append("\nRelevant document excerpts:")
+            for part in doc_parts[:2]:
+                lines.append(part)
 
-    return (
-        "Insufficient data to answer this question from the ingested documents. "
-        "Please ensure the relevant documents have been ingested and set OPENAI_API_KEY "
-        "for full AI-powered reasoning."
-    )
+    if not lines or (len(lines) == 1 and note):
+        lines.append(
+            "No matching data found. Please ensure the relevant documents have been ingested."
+        )
+
+    return "\n".join(lines)
