@@ -113,7 +113,7 @@ def _call_openai_compare(
     startup_evidence: dict[str, dict],
 ) -> str:
     from openai import OpenAI
-    from openai import RateLimitError, AuthenticationError, APIError
+    from openai import RateLimitError, AuthenticationError, PermissionDeniedError, APIError
 
     try:
         client = OpenAI(api_key=settings.openai_api_key)
@@ -134,8 +134,20 @@ def _call_openai_compare(
             max_tokens=1500,
         )
         return response.choices[0].message.content.strip()
-    except (RateLimitError, AuthenticationError, APIError) as exc:
-        note = "OpenAI quota exceeded" if isinstance(exc, RateLimitError) else f"OpenAI error: {exc}"
+    except RateLimitError:
+        note = "OpenAI quota exceeded (HTTP 429) - add billing at platform.openai.com/account/billing"
+        return _fallback_compare(startup_ids, startup_names, startup_evidence, question, note=note)
+    except AuthenticationError:
+        note = "OpenAI authentication failed (HTTP 401) - check OPENAI_API_KEY in .env"
+        return _fallback_compare(startup_ids, startup_names, startup_evidence, question, note=note)
+    except PermissionDeniedError:
+        note = (
+            "OpenAI access denied (HTTP 403) - try changing OPENAI_CHAT_MODEL=gpt-3.5-turbo in .env, "
+            "or check project permissions at platform.openai.com/settings"
+        )
+        return _fallback_compare(startup_ids, startup_names, startup_evidence, question, note=note)
+    except APIError as exc:
+        note = f"OpenAI API error (HTTP {exc.status_code})"
         return _fallback_compare(startup_ids, startup_names, startup_evidence, question, note=note)
 
 

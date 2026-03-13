@@ -71,7 +71,13 @@ def answer_question(
 
 def _call_openai(question: str, context: str, metrics: list[dict]) -> str:
     from openai import OpenAI
-    from openai import RateLimitError, AuthenticationError, APIError
+    from openai import (
+        RateLimitError,
+        AuthenticationError,
+        PermissionDeniedError,
+        APIConnectionError,
+        APIStatusError,
+    )
 
     try:
         client = OpenAI(api_key=settings.openai_api_key)
@@ -86,11 +92,32 @@ def _call_openai(question: str, context: str, metrics: list[dict]) -> str:
         )
         return response.choices[0].message.content.strip()
     except RateLimitError:
-        return _fallback_answer(question, context, metrics, note="OpenAI quota exceeded - showing data-driven answer.")
+        note = (
+            "OpenAI quota exceeded (HTTP 429). "
+            "Your API key has no remaining credits. "
+            "Add billing at https://platform.openai.com/account/billing"
+        )
     except AuthenticationError:
-        return _fallback_answer(question, context, metrics, note="OpenAI API key is invalid - showing data-driven answer.")
-    except APIError as exc:
-        return _fallback_answer(question, context, metrics, note=f"OpenAI API error ({exc.status_code}) - showing data-driven answer.")
+        note = (
+            "OpenAI authentication failed (HTTP 401). "
+            "Check that OPENAI_API_KEY in your .env is correct."
+        )
+    except PermissionDeniedError:
+        note = (
+            "OpenAI access denied (HTTP 403). "
+            "Common causes: (1) model 'gpt-4o-mini' not enabled for your project — "
+            "try changing OPENAI_CHAT_MODEL=gpt-3.5-turbo in .env; "
+            "(2) your region is restricted; "
+            "(3) project-level API restrictions on platform.openai.com/settings."
+        )
+    except APIConnectionError:
+        note = "Could not reach OpenAI API. Check your internet connection."
+    except APIStatusError as exc:
+        note = f"OpenAI API returned HTTP {exc.status_code}: {exc.message}"
+    except Exception as exc:
+        note = f"Unexpected error calling OpenAI: {exc}"
+
+    return _fallback_answer(question, context, metrics, note=note)
 
 
 def _fallback_answer(
